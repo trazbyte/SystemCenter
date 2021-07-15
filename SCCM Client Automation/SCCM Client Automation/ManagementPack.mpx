@@ -1,0 +1,12 @@
+﻿<ManagementPackFragment SchemaVersion="2.0" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <LanguagePacks>
+    <LanguagePack ID="ENU" IsDefault="true">
+      <DisplayStrings>
+        <DisplayString ElementID="SCCM_Client_Automation">
+          <Name>Configuration Manager Service Window Maintenance Mode Automation</Name>
+          <Description>Contains Methods and Rules to support Automating Maintenance Mode by using WMI Queries to look for ConfigMgr Service Windows</Description>
+        </DisplayString>
+      </DisplayStrings>
+    </LanguagePack>
+  </LanguagePacks>
+</ManagementPackFragment>

@@ -1,0 +1,468 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<ManagementPack SchemaVersion="2.0" ContentReadable="true" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <Manifest>
+    <Identity>
+      <ID>SCCM_Client_Automation</ID>
+      <Version>1.0.0.30</Version>
+    </Identity>
+    <Name>SCCM Client Automation</Name>
+    <References>
+      <Reference Alias="SC">
+        <ID>Microsoft.SystemCenter.Library</ID>
+        <Version>7.0.8433.0</Version>
+        <PublicKeyToken>31bf3856ad364e35</PublicKeyToken>
+      </Reference>
+      <Reference Alias="Windows">
+        <ID>Microsoft.Windows.Library</ID>
+        <Version>7.5.8501.0</Version>
+        <PublicKeyToken>31bf3856ad364e35</PublicKeyToken>
+      </Reference>
+      <Reference Alias="System">
+        <ID>System.Library</ID>
+        <Version>7.5.8501.0</Version>
+        <PublicKeyToken>31bf3856ad364e35</PublicKeyToken>
+      </Reference>
+    </References>
+  </Manifest>
+  <TypeDefinitions>
+    <ModuleTypes>
+      <DataSourceModuleType ID="Microsoft.SystemCenter.SCCMClientAutomation.MaintenanceMode.Powershell.DataSourceModule" Accessibility="Internal" Batching="false" Comment="Microsoft.SystemCenter.MaintenanceMode.Powershell.DataSourceModule">
+        <Configuration>
+          <IncludeSchemaTypes>
+            <SchemaType>Windows!Microsoft.Windows.PowerShellSchema</SchemaType>
+          </IncludeSchemaTypes>
+          <xsd:element minOccurs="1" name="ScriptName" type="NonNullString" xmlns:xsd="http://www.w3.org/2001/XMLSchema" />
+          <xsd:element minOccurs="1" name="ScriptBody" type="NonNullString" xmlns:xsd="http://www.w3.org/2001/XMLSchema" />
+          <xsd:element minOccurs="1" name="Parameters" type="NamedParametersType" xmlns:xsd="http://www.w3.org/2001/XMLSchema" />
+          <xsd:element minOccurs="1" name="TimeoutInSeconds" type="xsd:integer" xmlns:xsd="http://www.w3.org/2001/XMLSchema" />
+          <xsd:element minOccurs="1" name="IntervalInSeconds" type="xsd:integer" xmlns:xsd="http://www.w3.org/2001/XMLSchema" />
+          <xsd:element minOccurs="1" name="SyncTime" type="xsd:string" xmlns:xsd="http://www.w3.org/2001/XMLSchema" />
+        </Configuration>
+        <OverrideableParameters>
+          <OverrideableParameter ID="IntervalInSeconds" Selector="$Config/IntervalInSeconds$" ParameterType="int" />
+          <OverrideableParameter ID="SyncTime" Selector="$Config/SyncTime$" ParameterType="string" />
+        </OverrideableParameters>
+        <ModuleImplementation Isolation="Any">
+          <Composite>
+            <MemberModules>
+              <DataSource ID="Scheduler" TypeID="System!System.SimpleScheduler">
+                <IntervalSeconds>$Config/IntervalInSeconds$</IntervalSeconds>
+                <SyncTime>$Config/SyncTime$</SyncTime>
+              </DataSource>
+              <ProbeAction ID="PowershellProbe" TypeID="Windows!Microsoft.Windows.PowerShellPropertyBagTriggerOnlyProbe">
+                <ScriptName>$Config/ScriptName$</ScriptName>
+                <ScriptBody>$Config/ScriptBody$</ScriptBody>
+                <Parameters>$Config/Parameters$</Parameters>
+                <TimeoutSeconds>$Config/TimeoutInSeconds$</TimeoutSeconds>
+              </ProbeAction>
+            </MemberModules>
+            <Composition>
+              <Node ID="PowershellProbe">
+                <Node ID="Scheduler" />
+              </Node>
+            </Composition>
+          </Composite>
+        </ModuleImplementation>
+        <OutputType>System!System.PropertyBagData</OutputType>
+      </DataSourceModuleType>
+    </ModuleTypes>
+  </TypeDefinitions>
+  <Monitoring>
+    <Rules>
+      <Rule ID="SCCM_Client_Automation.SystemCenter.SCCM.AgentInitiated.MaintenanceMode.Rule" Target="SC!Microsoft.SystemCenter.Agent" Enabled="true" ConfirmDelivery="false" Remotable="true" Priority="Normal" DiscardLevel="100">
+        <Category>None</Category>
+        <DataSources>
+          <DataSource ID="DS" TypeID="Microsoft.SystemCenter.SCCMClientAutomation.MaintenanceMode.Powershell.DataSourceModule">
+            <ScriptName>ReadMaintenanceModeRegEntry.ps1</ScriptName>
+            <ScriptBody>
+    param($ComputerName)
+    Function isValidReason
+    {
+    Param($Reason)
+
+    if($Reason -eq "PlannedOther" -or $Reason -eq "UnplannedOther" -or $Reason -eq "PlannedHardwareMaintenance" -or $Reason -eq "UnplannedHardwareMaintenance" -or $Reason -eq "PlannedHardwareInstallation" -or $Reason -eq "UnplannedHardwareInstallation" -or $Reason -eq "PlannedOperatingSystemReconfiguration" -or $Reason -eq "UnplannedOperatingSystemReconfiguration" -or $Reason -eq "PlannedApplicationMaintenance" -or $Reason -eq "UnplannedApplicationMaintenance" -or $Reason -eq "ApplicationInstallation" -or $Reason -eq "ApplicationUnresponsive" -or $Reason -eq "ApplicationUnstable" -or $Reason -eq "SecurityIssue" -or $Reason -eq "LossOfNetworkConnectivity")
+    {return $True;}
+    Else
+    {return $False;}
+    }
+
+    $oAPI = new-object -comObject "MOM.ScriptAPI";
+    $oBag = $oAPI.CreatePropertyBag();
+
+    $MMKey = "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Microsoft Operations Manager\3.0\MaintenanceMode"
+    If  ( -Not ( Test-Path "Registry::$MMKey")){New-Item -Path "Registry::$MMKey" -ItemType RegistryKey -Force} Set-ItemProperty -path "Registry::$MMKey" -Name "Record" -Type "String" -Value ""; Set-ItemProperty -path "Registry::$MMKey" -Name "isValid" -Type "DWORD" -Value "0"
+
+    try
+    {
+    $isValid = (Get-ItemProperty "hklm:\SOFTWARE\Microsoft\Microsoft Operations Manager\3.0\MaintenanceMode" -ErrorAction SilentlyContinue).IsValid;
+    $record = (Get-ItemProperty "hklm:\SOFTWARE\Microsoft\Microsoft Operations Manager\3.0\MaintenanceMode" -ErrorAction SilentlyContinue).Record;
+    if(![string]::IsNullOrEmpty($isValid) -And ![string]::IsNullOrEmpty($record) -And $isValid -eq "1")
+    {
+    #'record' should contain parameters separated by "|". For Instance: "10|PlannedApplicationMaintenance|SMX\asttest:PCI|5/30/2016 8:04:26 AM"
+    [string]$separator = "|";
+    $paramArray = $record.Split($separator);
+    if($paramArray.Length -eq 4)
+    {
+    [Double]$Duration = $paramArray[0];
+    $Reason  = $paramArray[1];
+    $Comment  = $paramArray[3] + "-" + $paramArray[2];
+    $isValidReasonVar = isValidReason $Reason;
+
+    if( $isValidReasonVar -eq $True -And ![string]::IsNullorEmpty($Comment) -And ![string]::IsNullorEmpty($Duration) -And 5.0 -le $Duration)
+    {
+    $MaintenanceModeRecord = $Duration.ToString()+$separator+$Reason+$separator+$Comment;
+    $oBag.AddValue("Duration",$Duration.ToString());
+    $oBag.AddValue("Reason", $Reason);
+    $oBag.AddValue("Comment", $Comment);
+    $oBag.AddValue("ComputerName",$ComputerName);
+    $oAPI.LogScriptEvent("ReadMaintenanceModeRegEntry.ps1", 2222, 0, $ComputerName+":"+$MaintenanceModeRecord);
+    }
+    else
+    {
+    $oBag.AddValue("Duration","");
+    $oBag.AddValue("Reason", "");
+    $oBag.AddValue("Comment", "");
+    $oBag.AddValue("ComputerName","");
+    }
+    }
+    else
+    {
+    $oBag.AddValue("Duration","");
+    $oBag.AddValue("Reason", "");
+    $oBag.AddValue("Comment", "");
+    $oBag.AddValue("ComputerName","");
+    }
+    }
+    else
+    {
+    $oBag.AddValue("Duration","");
+    $oBag.AddValue("Reason", "");
+    $oBag.AddValue("Comment", "");
+    $oBag.AddValue("ComputerName","");
+    }
+    }
+    catch
+    {
+    $oBag.AddValue("Duration","");
+    $oBag.AddValue("Reason", "");
+    $oBag.AddValue("Comment", "");
+    $oBag.AddValue("ComputerName","");
+    }
+    if($isValid -eq "1")
+    {
+    set-itemproperty -path "hklm:\SOFTWARE\Microsoft\Microsoft Operations Manager\3.0\MaintenanceMode" -name IsValid -value "0" -ErrorAction SilentlyContinue;
+    $CurTime=Get-Date;
+    $RecordValue = $paramArray[0] + $separator + $paramArray[1] + $separator + $paramArray[2] + $separator + $CurTime;
+    set-itemproperty -path "hklm:\SOFTWARE\Microsoft\Microsoft Operations Manager\3.0\MaintenanceMode" -name Record -value $RecordValue -ErrorAction SilentlyContinue;
+    }
+    $oBag;
+  </ScriptBody>
+            <Parameters>
+              <Parameter>
+                <Name>ComputerName</Name>
+                <Value>$Target/Host/Property[Type="Windows!Microsoft.Windows.Computer"]/PrincipalName$</Value>
+              </Parameter>
+            </Parameters>
+            <TimeoutInSeconds>600</TimeoutInSeconds>
+            <IntervalInSeconds>90</IntervalInSeconds>
+            <SyncTime />
+          </DataSource>
+        </DataSources>
+        <WriteActions>
+          <WriteAction ID="WA" TypeID="Windows!Microsoft.Windows.PowerShellWriteAction" RunAs="SC!Microsoft.SystemCenter.PrivilegedMonitoringAccount" Target="SC!Microsoft.SystemCenter.CollectionManagementServer">
+            <ScriptName>StartMaintenanceMode.ps1</ScriptName>
+            <ScriptBody>
+    param($DurationStr, $Reason, $Comment, $ComputerName)
+
+    if([string]::IsNullOrEmpty($DurationStr) -or [string]::IsNullOrEmpty($Reason) -or [string]::IsNullOrEmpty($Comment) -or [string]::IsNullOrEmpty($ComputerName))
+    {
+    return;
+    }
+
+    try
+    {
+    $Instance = Get-SCOMClassInstance -Name $ComputerName;
+    }
+    catch
+    {
+    $OpsMgrInstalledLoc=(Get-ItemProperty  "hklm:\SOFTWARE\Microsoft\Microsoft Operations Manager\3.0\Setup").InstallDirectory|Split-Path;
+    $OpsMgrMdlLoc="$OpsMgrInstalledLoc\Powershell\OperationsManager";
+    Import-Module $OpsMgrMdlLoc;
+    $Instance = Get-SCOMClassInstance -Name $ComputerName;
+    }
+
+    if($Instance -ne $null)
+    {
+    $api = new-object -comObject 'MOM.ScriptAPI'
+    $CurTime=Get-Date;
+    [double]$Duration = $DurationStr;
+    if(5.0001 -gt $Duration -and 5.0 -le $Duration)
+    {
+    $Duration = 7.0001;
+    }
+    $EndTime = ($CurTime.AddMinutes($Duration));
+    Start-SCOMMaintenanceMode -Instance $Instance -EndTime $EndTime -Reason $Reason -Comment $Comment -ErrorAction SilentlyContinue;
+    if($? -eq $True)
+    {
+    $api.LogScriptEvent('StartMaintenanceModeWA.ps1',2223,0,$computerName+":"+$Duration+"|"+$Reason+"|"+$Comment+"|"+$EndTime);
+    }
+    }
+  </ScriptBody>
+            <Parameters>
+              <Parameter>
+                <Name>DurationStr</Name>
+                <Value>$Data/Property[@Name='Duration']$</Value>
+              </Parameter>
+              <Parameter>
+                <Name>Reason</Name>
+                <Value>$Data/Property[@Name='Reason']$</Value>
+              </Parameter>
+              <Parameter>
+                <Name>Comment</Name>
+                <Value>$Data/Property[@Name='Comment']$</Value>
+              </Parameter>
+              <Parameter>
+                <Name>ComputerName</Name>
+                <Value>$Data/Property[@Name='ComputerName']$</Value>
+              </Parameter>
+            </Parameters>
+            <TimeoutSeconds>600</TimeoutSeconds>
+          </WriteAction>
+        </WriteActions>
+      </Rule>
+      <Rule ID="SCCM_Client_Automation.SystemCenter.SCCMAgent.ServiceWindow.MMAction.Rule" Target="SC!Microsoft.SystemCenter.Agent" Enabled="false" ConfirmDelivery="false" Remotable="true" Priority="Normal" DiscardLevel="100">
+        <Category>Maintenance</Category>
+        <DataSources>
+          <DataSource ID="DS" TypeID="System!System.SimpleScheduler">
+            <IntervalSeconds>300</IntervalSeconds>
+            <SyncTime></SyncTime>
+          </DataSource>
+        </DataSources>
+        <WriteActions>
+          <WriteAction ID="WA" TypeID="Windows!Microsoft.Windows.PowerShellWriteAction" RunAs="SC!Microsoft.SystemCenter.PrivilegedMonitoringAccount">
+            <ScriptName>SetConfigMgrServiceWindowMMAction.ps1</ScriptName>
+            <ScriptBody>
+    #region Script Global Variables
+    $script:ScriptName = Split-Path -Path $MyInvocation.MyCommand.Definition -Leaf
+    $script:WriteMode = $True
+    $CurrentTime = Get-Date
+    $GetSCCMClientVersion = Get-WmiObject -NameSpace Root\CCM -Class Sms_Client | Select-Object ClientVersion
+    $ServiceWindows = Get-WmiObject -namespace root\ccm\ClientSDK -class CCM_ServiceWindow | Where-Object {$_.Type -lt '6'} | Select-Object ID, StartTime, EndTime, Duration, Type
+    $isValid = (Get-ItemProperty "hklm:\SOFTWARE\Microsoft\Microsoft Operations Manager\3.0\MaintenanceMode" -ErrorAction SilentlyContinue).IsValid
+    $record = (Get-ItemProperty "hklm:\SOFTWARE\Microsoft\Microsoft Operations Manager\3.0\MaintenanceMode" -ErrorAction SilentlyContinue).Record
+    [string]$separator = "|"
+    $MMKey = "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Microsoft Operations Manager\3.0\MaintenanceMode"
+
+    # This table allows you to map a specific SCOM Maintenance mode reason to the different service window types in SCCM.
+    # This hash table correlates data between 3 APIs.
+    # The WMI ServiceWindow.Type (1,2,3,4,5,6) [Integer]
+    # The String description of that Type ( Reference https://msdn.microsoft.com/en-us/library/jj155419.aspx )
+    # The Matching Maintenance Mode description used by SCOM. ( Reference https://docs.microsoft.com/en-us/powershell/module/operationsmanager/start-scommaintenancemode?view=systemcenter-ps-2016 )
+      
+#Retrieve strings using $ServiceWindowType.($ServiceWindow.Type).CMName or $ServiceWindowType.($ServiceWindow.Type).OMName
+$ServiceWindowType = @{
+    1 = @{ CMName = "ALLPROGRAM_SERVICEWINDOW";
+           OMName = "PlannedApplicationMaintenance" }
+
+    2 = @{ CMName = "PROGRAM_SERVICEWINDOW";
+           OMName = "PlannedApplicationMaintenance" }
+
+    3 = @{ CMName = "REBOOTREQUIRED_SERVICEWINDOW";
+           OMName = "PlannedOther" }
+
+    4 = @{ CMName = "SOFTWAREUPDATE_SERVICEWINDOW";
+           OMName = "PlannedOperatingSystemReconfiguration" }
+
+    5 = @{ CMName = "OSD_SERVICEWINDOW";
+           OMName = "PlannedOperatingSystemReconfiguration" }
+
+    6 = @{ CMName = "USER_DEFINED_SERVICE_WINDOW";
+           OMName = "PlannedApplicationMaintenance" }
+}
+
+
+#endregion Script Global Variables
+
+#region Define SCOM API and Property Bag to send data back to SCOM
+$oAPI = new-object -comObject "MOM.ScriptAPI";
+$oBag = $oAPI.CreatePropertyBag();
+#endregion Define SCOM API and Property Bag to send data back to SCOM
+
+#region Define Global Functions
+#Function to check if the Reason provided in string array is a valid type that SCOM will accept for starting Maintenance Mode.
+Function isValidReason {
+    Param($Reason)
+
+    $ValidReasons = @( 
+        "PlannedOther","UnplannedOther","PlannedHardwareMaintenance","UnplannedHardwareMaintenance",
+        "PlannedHardwareInstallation","UnplannedHardwareInstallation","PlannedOperatingSystemReconfiguration",
+        "UnplannedOperatingSystemReconfiguration","PlannedApplicationMaintenance","UnplannedApplicationMaintenance",
+        "ApplicationInstallation","ApplicationUnresponsive","ApplicationUnstable","SecurityIssue","LossOfNetworkConnectivity"
+    )
+
+    if ( $ValidReasons -contains $Reason )
+    #Oh quit showing off that 360 widescreen... ;)
+    #if($Reashon -eq "PlannedOther" -or $Reason -eq "UnplannedOther" -or $Reason -eq "PlannedHardwareMaintenance" -or $Reason -eq "UnplannedHardwareMaintenance" -or $Reason -eq "PlannedHardwareInstallation" -or $Reason -eq "UnplannedHardwareInstallation" -or $Reason -eq "PlannedOperatingSystemReconfiguration" -or $Reason -eq "UnplannedOperatingSystemReconfiguration" -or $Reason -eq "PlannedApplicationMaintenance" -or $Reason -eq "UnplannedApplicationMaintenance" -or $Reason -eq "ApplicationInstallation" -or $Reason -eq "ApplicationUnresponsive" -or $Reason -eq "ApplicationUnstable" -or $Reason -eq "SecurityIssue" -or $Reason -eq "LossOfNetworkConnectivity")
+    {return $True;}
+    else
+    {return $False;}
+}
+
+#Function to Calculate Service Windows Status 
+#returns [bool]InMaintenance, [int]DurationMinutes (calculates totalduration if there is any overlap in service windows), [DateTime]Start, [DateTime]End
+Function Get-ServiceWindowStatus {
+    param ( $ServiceWindows )
+
+    #Templating an empty return object. Properties are set before return is called.
+    $ReturnObject = New-Object PSCustomObject -Property @{
+        ServiceWindow = $Null
+        InMaintenance = $False
+        DurationMinutes = $Null
+        Start = $Null
+        End = $Null
+     }
+
+    #If no service windows are passed, try to get them
+    if ( -not $ServiceWindows ) {
+        $ServiceWindows = get-wmiobject -namespace root\ccm\ClientSDK -class CCM_ServiceWindow -ErrorAction Stop | Where-Object {$_.Type -lt 6} | Select-Object ID, StartTime, EndTime, Duration, Type
+    }
+
+    #The following select uses what we call "Calculated Properties".
+    #This select pulls all properties already attached (using *) then attaches two more calculated properties.
+    #The full syntax is @{Name="PropName";Expression={Scriptblock that modifies an existing property} }
+    $ServiceWindows = $ServiceWindows | Select *,
+        @{N="Start";E={ [System.Management.ManagementDateTimeConverter]::ToDateTime($_.StartTime).ToUniversalTime()} },
+        @{N="End";E={ [System.Management.ManagementDateTimeConverter]::ToDateTime($_.EndTime).ToUniversalTime()} }
+
+    #Select the next service window or the current one if endtime hasn't passed yet.
+    $ServiceWindow = $ServiceWindows | 
+        Sort start |
+        Select -First 1
+    
+    #If the current/next incoming service window has overlap, get the service window(s) that overlap it.
+    $SW_Overlap = $ServiceWindows | ? { ( $_.Start -ge $ServiceWindow.Start ) -and ( $_.Start -le $ServiceWindow.End ) -and ( $_.ID -ne $ServiceWindow.ID ) }
+
+    if ( $SW_Overlap ) {
+        #This is a tricky addition, it takes each element from both arrays are creates a larger arrray with all elements.
+        #This was done just in case there is more than one overlapping service window.
+        $StartTime = @($ServiceWindow.Start) + @($sw_overlap.start) | sort | Select -first 1
+        $EndTime = @($ServiceWindow.End) + @($SW_Overlap.End) | sort | Select -Last 1
+    }
+    else {
+        $StartTime = $ServiceWindow.Start
+        $EndTime = $ServiceWindow.End
+    }
+
+    #Get current time to do some calculations
+    $CurrentTime = (Get-Date)
+
+    #Determine if we're currently in maintenance.
+    $ReturnObject.InMaintenance = [bool]( ($CurrentTime -ge $ServiceWindow.Start) -and ($CurrentTime -le $ServiceWindow.End) )
+
+    #If we're in maintenance, calculate duration based on time left between now and end of maintenance window.
+    if ( $ReturnObject.InMaintenance -eq $True ) {
+        [int]$DurationMinutes = [double]( New-TimeSpan -Start $CurrentTime -End $ServiceWindow.End | Select -ExpandProperty TotalMinutes ) + .5 #round up to the next whole minute
+    }
+    #If not in maintenance, calculate duration based on start and end of service window.
+    else {
+        [int]$DurationMinutes = [double]( New-TimeSpan -Start $ServiceWindow.Start -End $ServiceWindow.End | Select -ExpandProperty TotalMinutes ) + .5 #round up to the next whole minute
+    }
+
+    #Define remaining properties of the returnobject
+    $ReturnObject.ServiceWindow = $ServiceWindow
+    $ReturnObject.DurationMinutes = $DurationMinutes
+    $ReturnObject.Start = $StartTime
+    $ReturnObject.End = $EndTime
+
+    return $ReturnObject
+}
+#endregion Define Global Functions
+
+#region Main Script Block
+# 1. If "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Microsoft Operations Manager\3.0\MaintenanceMode" does not exist create it and populate default information to enable scripts
+if ( -Not ( Test-Path "Registry::$MMKey") ) {
+        $SCCMDefaultValue = "10" + $separator + "PlannedOther" + $separator + "Populated by SCCM Service Window Script" + $separator + $CurrentTime 
+        New-Item -Path "Registry::$MMKey" -ItemType RegistryKey -Force 
+        Set-ItemProperty -Path "hklm:\SOFTWARE\Microsoft\Microsoft Operations Manager\3.0\MaintenanceMode" -name Record -value $SCCMDefaultValue -ErrorAction SilentlyContinue;
+        Set-ItemProperty -Path "hklm:\SOFTWARE\Microsoft\Microsoft Operations Manager\3.0\MaintenanceMode" -name isValid -value 0 -ErrorAction SilentlyContinue;
+        return
+     }
+     
+# 2. Stop processing if SCCM client isn't version 5 or later.
+if ( $GetSCCMClientVersion.ClientVersion -lt '5.' ) {
+    #Log a warning in SCOM
+    $oAPI.LogScriptEvent($ScriptName,2222,2,"`n SCCM Service Windows script determined SCCM client is lower than version 5 on $env:computername.")
+    return
+}
+
+# 3. Stop processing if the system has no service windows.
+if ( -not $ServiceWindows ) {
+    #Log a warning in SCOM
+    $oAPI.LogScriptEvent($ScriptName,2222,2,"`n SCCM Service Windows script found no defined service windows on $env:computername.")
+    return
+}
+
+# 4. Check if the system is in an SCCM service window and set SCOM Maintenance mode if it is.
+$CurrentStatus = Get-ServiceWindowStatus -ServiceWindows $ServiceWindows
+
+if ( $CurrentStatus.InMaintenance ) {
+    try {
+        if ( $isValid -eq '0' ) {
+            # If the Registry Key values are empty, populate with default data to start flow of service windows.
+            if ( [string]::IsNullorEmpty($Record) ) {
+                $SCCMRecordValue = "$($CurrentStatus.DurationMinutes)" + $separator + "PlannedApplicationMaintenance" + $separator + "SCCM Service Window Started At" + $separator + $CurrentTime 
+                if ( $script:WriteMode ) {
+                    Set-ItemProperty -Path "hklm:\SOFTWARE\Microsoft\Microsoft Operations Manager\3.0\MaintenanceMode" -name Record -value $SCCMRecordValue -ErrorAction SilentlyContinue;
+                    Set-ItemProperty -Path "hklm:\SOFTWARE\Microsoft\Microsoft Operations Manager\3.0\MaintenanceMode" -name isValid -value 1 -ErrorAction SilentlyContinue;
+                    $oAPI.LogScriptEvent($script:ScriptName, 2222, 0, "${env:ComputerName}:${SCCMRecordValue}")
+                }
+                else { throw "${env:ComputerName}:Cannot set maintenance mode, writemode disabled!" }
+            }
+
+            #If Registry Key DWORD isValid is 0 and String Record is not Null, set the type according to it's number
+            if ( ![string]::IsNullorEmpty($Record) -and ![string]::IsNullorEmpty($CurrentStatus.DurationMinutes) -and ![string]::IsNullOrEmpty($CurrentStatus.ServiceWindow.Type) ) {
+
+                $SCCMRecordValue = "$($CurrentStatus.DurationMinutes)" + $separator + $($ServiceWindowType.([INT]$CurrentStatus.ServiceWindow.Type).OMName ) + $separator + "SCCM $($ServiceWindowType.([INT]$CurrentStatus.ServiceWindow.Type).CMName )Service Window Started At $([STRING]$CurrentStatus.Start) and will end at $([STRING]$CurrentStatus.End)" + $separator + $CurrentStatus.Start 
+                if ( $script:WriteMode ) {
+                    Set-ItemProperty -Path "hklm:\SOFTWARE\Microsoft\Microsoft Operations Manager\3.0\MaintenanceMode" -name Record -value $SCCMRecordValue -ErrorAction SilentlyContinue;
+                    Set-ItemProperty -Path "hklm:\SOFTWARE\Microsoft\Microsoft Operations Manager\3.0\MaintenanceMode" -name isValid -value 1 -ErrorAction SilentlyContinue;
+                    $oAPI.LogScriptEvent($script:ScriptName, 2222, 0, "${env:ComputerName}:${SCCMRecordValue}")
+                }
+                else { throw "${env:ComputerName}:Cannot set maintenance mode, writemode disabled!" }
+            }
+        }
+    }
+    catch {
+        #Log error in SCOM
+        $oAPI.LogScriptEvent($script:ScriptName,2222,1,"${env:ComputerName}:SCCM Service Windows script returned an error. - $($_.Exception.Message)")
+    }
+}
+else {
+    $oAPI.LogScriptEvent($script:ScriptName,2224,0,"${env:ComputerName}:SCCM Service Windows script returned no active service windows. The next SCCM service windows is at $CurrentStatus")
+}
+
+#endregion Main Script Block
+  </ScriptBody>
+            <Parameters></Parameters>
+            <TimeoutSeconds>120</TimeoutSeconds>
+          </WriteAction>
+        </WriteActions>
+      </Rule>
+    </Rules>
+  </Monitoring>
+  <LanguagePacks>
+    <LanguagePack ID="ENU" IsDefault="true">
+      <DisplayStrings>
+        <DisplayString ElementID="SCCM_Client_Automation.SystemCenter.SCCM.AgentInitiated.MaintenanceMode.Rule">
+          <Name>Agent Initiated Maintenance Mode Rule for SCOM 2012 or SCOM 2012 R2</Name>
+          <Description>Agent Initiated Maintenance Mode Rule for SCOM 2012 or SCOM 2012 R2 is based upon the Agent Initiated Maintenance Mode Rule found in SCOM 2016+. Difference is that it detects for the registry entry on the Agent side and if it's not there, create Key and Items. </Description>
+        </DisplayString>
+        <DisplayString ElementID="SCCM_Client_Automation.SystemCenter.SCCMAgent.ServiceWindow.MMAction.Rule">
+          <Name>Configuration Manager Agent Service Window Detection &amp; Place into Maintenance Mode</Name>
+          <Description>This rule Check's WMI for Configuration Manager version &gt; '5.', Service windows that are not "User Defined (Type 6)." It calculates the Service Window Duration, accounts for overlap, then sets the registry Key with the Duration &amp; MM Reason. It provides an event (2222, 2224)  to the OperationsManager event log if pass or fail.  It is dependant on the "Agent Initiated Maintenance Mode Rule" in SCOM 2016+ or "Agent Initiated Maintenance Mode Rule for SCOM 2012 or SCOM 2012 R2" contained in this MP to be enabled in order to function.    </Description>
+        </DisplayString>
+      </DisplayStrings>
+      <KnowledgeArticles></KnowledgeArticles>
+    </LanguagePack>
+  </LanguagePacks>
+</ManagementPack>

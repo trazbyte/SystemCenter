@@ -1,0 +1,256 @@
+<TemplateGroup>
+  <Instances>
+    <Instance ID="Instancead122e8e2c2b461a804a5ac5069aa36f" Type="Microsoft.SystemCenter.Authoring.CodeGeneration.Monitoring.CustomRule" Version="1.0.0.0">
+      <CustomRuleConfig xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+        <Id>AgentInitiated.Rule</Id>
+        <DisplayName>SCOM Agent Initiated Maintenance Mode Rule for Active SCCM Service Windows</DisplayName>
+        <Description>SCOM Agent Initiated Maintenance Mode based upon Active SCCM Service Windows. This rule will combine Service Windows, calculate the duration and send a Start-SCOMMaintenanceMode to the Management Server for the client.</Description>
+        <Category>Maintenance</Category>
+        <ConfirmDelivery>false</ConfirmDelivery>
+        <Target>SC!Microsoft.SystemCenter.Agent</Target>
+        <Enabled>true</Enabled>
+        <Remotable>true</Remotable>
+        <Priority>Normal</Priority>
+        <DiscardLevel>100</DiscardLevel>
+        <DataSources>
+          <RuleDataSourceItem>
+            <DataSourceId>DS</DataSourceId>
+            <DataSourceConfig>&lt;ScriptName&gt;SetSCOMMaintenanceModeViaSCCMServiceWindow.ps1&lt;/ScriptName&gt;&lt;ScriptBody&gt;
+    param($ComputerName)
+    #region Script Global Variables
+    $ScriptName = "SetSCOMMaintenanceModeViaSCCMServiceWindow.ps1"
+    $ScriptStartTime = Get-Date
+    $CurrentTime = Get-Date
+    $WhoAmI = whoami
+
+    $Error.Clear()
+    $GetSCCMClientVersion = Get-WmiObject -NameSpace Root\CCM -Class Sms_Client | Select-Object ClientVersion
+    $ServiceWindows = Get-WmiObject -namespace root\ccm\ClientSDK -class CCM_ServiceWindow | Where-Object {$_.Type -lt '6'} | Select-Object ID, StartTime, EndTime, Duration, Type
+    IF ($Error)
+    {
+    $momapi.LogScriptEvent($ScriptName,$EventID,2221,"$ComputerName `n FATAL ERROR: Unable to detect an active SCCM Client on system via WMI Root\CCM. `n Terminating script. `n Running Script as: $WhoAmI `n Error is: ($Error).")
+    EXIT
+    }
+
+
+    # This table allows you to map a specific SCOM Maintenance mode reason to the different service window types in SCCM.
+    # This hash table correlates data between 3 APIs.
+    # The WMI ServiceWindow.Type (1,2,3,4,5,6) [Integer]
+    # The String description of that Type ( Reference https://msdn.microsoft.com/en-us/library/jj155419.aspx )
+    # The Matching Maintenance Mode description used by SCOM. ( Reference https://docs.microsoft.com/en-us/powershell/module/operationsmanager/start-scommaintenancemode?view=systemcenter-ps-2016 )
+
+    #Retrieve strings using $ServiceWindowType.($ServiceWindow.Type).CMName or $ServiceWindowType.($ServiceWindow.Type).OMName
+    $ServiceWindowType = @{
+    1 = @{ CMName = "ALLPROGRAM_SERVICEWINDOW";
+    OMName = "PlannedApplicationMaintenance" }
+
+    2 = @{ CMName = "PROGRAM_SERVICEWINDOW";
+    OMName = "PlannedApplicationMaintenance" }
+
+    3 = @{ CMName = "REBOOTREQUIRED_SERVICEWINDOW";
+    OMName = "PlannedOther" }
+
+    4 = @{ CMName = "SOFTWAREUPDATE_SERVICEWINDOW";
+    OMName = "PlannedOperatingSystemReconfiguration" }
+
+    5 = @{ CMName = "OSD_SERVICEWINDOW";
+    OMName = "PlannedOperatingSystemReconfiguration" }
+
+    6 = @{ CMName = "USER_DEFINED_SERVICE_WINDOW";
+    OMName = "PlannedApplicationMaintenance" }
+    }
+
+
+    #endregion Script Global Variables
+
+    #region Define SCOM API and Property Bag to send data back to SCOM
+    $oAPI = new-object -comObject "MOM.ScriptAPI";
+    $oBag = $oAPI.CreatePropertyBag();
+    #endregion Define SCOM API and Property Bag to send data back to SCOM
+
+    #region Define Global Functions
+
+    #Function to Calculate Service Windows Status
+    #returns [bool]InMaintenance, [int]DurationMinutes (calculates totalduration if there is any overlap in service windows), [DateTime]Start, [DateTime]End
+    Function Get-ServiceWindowStatus {
+    param ( $ServiceWindows )
+
+    #Templating an empty return object. Properties are set before return is called.
+    $ReturnObject = New-Object PSCustomObject -Property @{
+    ServiceWindow = $Null
+    InMaintenance = $False
+    DurationMinutes = $Null
+    Start = $Null
+    End = $Null
+    }
+
+    #If no service windows are passed, try to get them
+    if ( -not $ServiceWindows ) {
+    $ServiceWindows = get-wmiobject -namespace root\ccm\ClientSDK -class CCM_ServiceWindow -ErrorAction Stop | Where-Object {$_.Type -lt 6} | Select-Object ID, StartTime, EndTime, Duration, Type
+    }
+
+    #The following select uses what we call "Calculated Properties".
+    #This select pulls all properties already attached (using *) then attaches two more calculated properties.
+    #The full syntax is @{Name="PropName";Expression={Scriptblock that modifies an existing property} }
+    $ServiceWindows = $ServiceWindows | Select *,
+    @{N="Start";E={ [System.Management.ManagementDateTimeConverter]::ToDateTime($_.StartTime).ToUniversalTime()} },
+    @{N="End";E={ [System.Management.ManagementDateTimeConverter]::ToDateTime($_.EndTime).ToUniversalTime()} }
+
+    #Select the next service window or the current one if endtime hasn't passed yet.
+    $ServiceWindow = $ServiceWindows |
+    Sort start |
+    Select -First 1
+
+    #If the current/next incoming service window has overlap, get the service window(s) that overlap it.
+    $SW_Overlap = $ServiceWindows | ? { ( $_.Start -ge $ServiceWindow.Start ) -and ( $_.Start -le $ServiceWindow.End ) -and ( $_.ID -ne $ServiceWindow.ID ) }
+
+    if ( $SW_Overlap ) {
+    #This is a tricky addition, it takes each element from both arrays are creates a larger arrray with all elements.
+    #This was done just in case there is more than one overlapping service window.
+    $StartTime = @($ServiceWindow.Start) + @($sw_overlap.start) | sort | Select -first 1
+    $EndTime = @($ServiceWindow.End) + @($SW_Overlap.End) | sort | Select -Last 1
+    }
+    else {
+    $StartTime = $ServiceWindow.Start
+    $EndTime = $ServiceWindow.End
+    }
+
+    #Get current time to do some calculations
+    $CurrentTime = (Get-Date)
+
+    #Determine if we're currently in maintenance.
+    $ReturnObject.InMaintenance = [bool]( ($CurrentTime -ge $ServiceWindow.Start) -and ($CurrentTime -le $ServiceWindow.End) )
+
+    #If we're in maintenance, calculate duration based on time left between now and end of maintenance window.
+    if ( $ReturnObject.InMaintenance -eq $True ) {
+    [int]$DurationMinutes = [double]( New-TimeSpan -Start $CurrentTime -End $ServiceWindow.End | Select -ExpandProperty TotalMinutes ) + .5 #round up to the next whole minute
+    }
+    #If not in maintenance, calculate duration based on start and end of service window.
+    else {
+    [int]$DurationMinutes = [double]( New-TimeSpan -Start $ServiceWindow.Start -End $ServiceWindow.End | Select -ExpandProperty TotalMinutes ) + .5 #round up to the next whole minute
+    }
+
+    #Define remaining properties of the returnobject
+    $ReturnObject.ServiceWindow = $ServiceWindow
+    $ReturnObject.DurationMinutes = $DurationMinutes
+    $ReturnObject.Start = $StartTime
+    $ReturnObject.End = $EndTime
+
+    return $ReturnObject
+    }
+    #endregion Define Global Functions
+
+    #region Main Script Block
+
+    $CurrentStatus = Get-ServiceWindowStatus -ServiceWindows $ServiceWindows
+
+    # 1. Stop processing if SCCM client isn't version 5 or later.
+    if ( $GetSCCMClientVersion.ClientVersion -lt '5.' ) {
+    #Log a warning in SCOM
+    $oAPI.LogScriptEvent($ScriptName,2222,2,"`n SCCM Service Windows script determined SCCM client is lower than version 5 on $ComputerName. `n Running Script as: $WhoAmI")
+    return
+    }
+
+    # 2. Stop processing if the system has no service windows.
+    if ( -not $ServiceWindows ) {
+    #Log a warning in SCOM
+    $oAPI.LogScriptEvent($ScriptName,2222,2,"`n SCCM Service Windows script found no defined service windows on $ComputerName. `n Running Script as: $WhoAmI")
+    return
+    }
+
+    # 3. Check if the duration has a value
+    if ($CurrentStatus.DurationMinutes -eq $null){
+    #Log a warning in SCOM
+    $oAPI.LogScriptEvent($ScriptName,2222,2,"`n SCCM Service Windows script found no defined service window duration on $ComputerName. `n Running Script as: $WhoAmI")
+    return
+    }
+
+    # 4. Check if the system is in an SCCM service window and set SCOM Maintenance mode if it is.
+    if ( $CurrentStatus.InMaintenance -and $CurrentStatus.ServiceWindow.Type -le '5' -and $CurrentStatus.DurationMinutes -ne $null)
+    {
+
+    $StartMMTime = $CurrentStatus.Start
+    $EndMMTime = $CurrentStatus.End
+    $MMDuration = $CurrentStatus.DurationMinutes
+    $Reason = $($ServiceWindowType.([INT]$CurrentStatus.ServiceWindow.Type).OMName )
+    $Comment = "The SCCM Service Window Started for $Reason on $ComputerName at $StartMMTime and will end at $EndMMTime for at total of $MMDuration minutes. This Maintenance Mode Request was processed by $ScriptName on $ComputerName from the 'Configuration Manager Service Window Maintenance Mode Automation' management pack."
+
+
+    $ScriptEndTime = Get-Date
+    $ScriptTime = ($ScriptEndTime - $ScriptStartTime).TotalSeconds
+
+    $oBag.AddValue("Duration",$CurrentStatus.DurationMinutes.ToString());
+    $oBag.AddValue("Reason", $Reason);
+    $oBag.AddValue("Comment",$Comment );
+    $oBag.AddValue("ComputerName",$ComputerName);
+    $oAPI.LogScriptEvent($ScriptName, 2222, 0, "$Comment `n Running Script as: $WhoAmI `n Script Completed in seconds: $ScriptTime")
+    $oBag
+    return
+    }
+    Else
+    {
+    $StartMMTime = $CurrentStatus.Start
+    $EndMMTime = $CurrentStatus.End
+    $MMDuration = $CurrentStatus.DurationMinutes
+    $ScriptEndTime = Get-Date
+    $ScriptTime = ($ScriptEndTime - $ScriptStartTime).TotalSeconds
+    $oAPI.LogScriptEvent($ScriptName,2224,0,"Computer: $ComputerName `n SCCM Service Windows script returned no active service windows. The next SCCM service window will start at: `n `n Start Time: $StartMMTime `n End Time: $EndMMTime `n Duration: $MMDuration `n `n Running Script as: $WhoAmI `n Script Completed in seconds: $ScriptTime")
+    return
+    }
+    
+    #endregion Main Script Block
+  &lt;/ScriptBody&gt;&lt;Parameters&gt;&lt;Parameter&gt;&lt;Name&gt;ComputerName&lt;/Name&gt;&lt;Value&gt;$Target/Host/Property[Type="Windows!Microsoft.Windows.Computer"]/PrincipalName$&lt;/Value&gt;&lt;/Parameter&gt;&lt;/Parameters&gt;&lt;TimeoutInSeconds&gt;600&lt;/TimeoutInSeconds&gt;&lt;IntervalInSeconds&gt;300&lt;/IntervalInSeconds&gt;&lt;SyncTime /&gt;</DataSourceConfig>
+            <DataSourceRunAs />
+            <DataSourceType>Microsoft.SystemCenter.ConfigMgrAgent.Automation.MaintenanceMode.Powershell.DataSourceModule</DataSourceType>
+          </RuleDataSourceItem>
+        </DataSources>
+        <ConditionDetectionId>CD</ConditionDetectionId>
+        <WriteActions>
+          <RuleWriteActionItem>
+            <WriteActionId>WA</WriteActionId>
+            <WriteActionConfig>&lt;ScriptName&gt;StartMaintenanceModeWA.ps1&lt;/ScriptName&gt;&lt;ScriptBody&gt;
+    param($DurationStr, $Reason, $Comment, $ComputerName)
+
+    if([string]::IsNullOrEmpty($DurationStr) -or [string]::IsNullOrEmpty($Reason) -or [string]::IsNullOrEmpty($Comment) -or [string]::IsNullOrEmpty($ComputerName))
+    {
+    return;
+    }
+
+    try
+    {
+    $Instance = Get-SCOMClassInstance -Name $ComputerName;
+    }
+    catch
+    {
+    $OpsMgrInstalledLoc=(Get-ItemProperty  "hklm:\SOFTWARE\Microsoft\Microsoft Operations Manager\3.0\Setup").InstallDirectory|Split-Path;
+    $OpsMgrMdlLoc="$OpsMgrInstalledLoc\Powershell\OperationsManager";
+    Import-Module $OpsMgrMdlLoc;
+    $Instance = Get-SCOMClassInstance -Name $ComputerName;
+    }
+
+    if($Instance -ne $null)
+    {
+    $api = new-object -comObject 'MOM.ScriptAPI'
+    $CurTime = Get-Date;
+    [double]$Duration = $DurationStr;
+    if(5.0001 -gt $Duration -and 5.0 -le $Duration)
+    {
+    $Duration = 7.0001;
+    }
+    $EndTime = ($CurTime.AddMinutes($Duration));
+    Start-SCOMMaintenanceMode -Instance $Instance -EndTime $EndTime -Reason $Reason -Comment $Comment -ErrorAction SilentlyContinue;
+    if($? -eq $True)
+    {
+    $api.LogScriptEvent('StartMaintenanceModeWA.ps1',2223,0,"`n Computer: $computerName `n Maintenance Mode End Time: $EndTime `n Duration in Minutes: $Duration `n Reason: $Reason `n `n $Comment");
+    }
+    }
+  &lt;/ScriptBody&gt;&lt;Parameters&gt;&lt;Parameter&gt;&lt;Name&gt;DurationStr&lt;/Name&gt;&lt;Value&gt;$Data/Property[@Name='Duration']$&lt;/Value&gt;&lt;/Parameter&gt;&lt;Parameter&gt;&lt;Name&gt;Reason&lt;/Name&gt;&lt;Value&gt;$Data/Property[@Name='Reason']$&lt;/Value&gt;&lt;/Parameter&gt;&lt;Parameter&gt;&lt;Name&gt;Comment&lt;/Name&gt;&lt;Value&gt;$Data/Property[@Name='Comment']$&lt;/Value&gt;&lt;/Parameter&gt;&lt;Parameter&gt;&lt;Name&gt;ComputerName&lt;/Name&gt;&lt;Value&gt;$Data/Property[@Name='ComputerName']$&lt;/Value&gt;&lt;/Parameter&gt;&lt;/Parameters&gt;&lt;TimeoutSeconds&gt;600&lt;/TimeoutSeconds&gt;</WriteActionConfig>
+            <WriteActionRunAs>SC!Microsoft.SystemCenter.PrivilegedMonitoringAccount</WriteActionRunAs>
+            <WriteActionType>Windows!Microsoft.Windows.PowerShellWriteAction</WriteActionType>
+            <WriteActionTarget>SC!Microsoft.SystemCenter.CollectionManagementServer</WriteActionTarget>
+          </RuleWriteActionItem>
+        </WriteActions>
+      </CustomRuleConfig>
+    </Instance>
+  </Instances>
+</TemplateGroup>

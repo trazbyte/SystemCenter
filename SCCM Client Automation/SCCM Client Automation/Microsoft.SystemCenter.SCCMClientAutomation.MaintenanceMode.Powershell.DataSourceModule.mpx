@@ -1,0 +1,45 @@
+﻿<ManagementPackFragment SchemaVersion="2.0" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <TypeDefinitions>
+    <ModuleTypes>
+  <DataSourceModuleType ID="Microsoft.SystemCenter.ConfigMgrAgent.Automation.MaintenanceMode.Powershell.DataSourceModule" Accessibility="Internal" Batching="false" Comment="Microsoft System Center Configuration Manager Maintenance Mode Powershell DataSource Module">
+    <Configuration>
+      <IncludeSchemaTypes>
+        <SchemaType>Windows!Microsoft.Windows.PowerShellSchema</SchemaType>
+      </IncludeSchemaTypes>
+      <xsd:element minOccurs="1" name="ScriptName" type="NonNullString"/>
+      <xsd:element minOccurs="1" name="ScriptBody" type="NonNullString"/>
+      <xsd:element minOccurs="1" name="Parameters" type="NamedParametersType"/>
+      <xsd:element minOccurs="1" name="TimeoutInSeconds" type="xsd:integer"/>
+      <xsd:element minOccurs="1" name="IntervalInSeconds" type="xsd:integer"/>
+      <xsd:element minOccurs="1" name="SyncTime" type="xsd:string"/>
+    </Configuration>
+    <OverrideableParameters>
+      <OverrideableParameter ID="IntervalInSeconds" Selector="$Config/IntervalInSeconds$" ParameterType="int"/>
+      <OverrideableParameter ID="SyncTime" Selector="$Config/SyncTime$" ParameterType="string"/>
+    </OverrideableParameters>
+    <ModuleImplementation Isolation="Any">
+      <Composite>
+        <MemberModules>
+          <DataSource ID="Scheduler" TypeID="System!System.SimpleScheduler">
+            <IntervalSeconds>$Config/IntervalInSeconds$</IntervalSeconds>
+            <SyncTime>$Config/SyncTime$</SyncTime>
+          </DataSource>
+          <ProbeAction ID="PowershellProbe" TypeID="Windows!Microsoft.Windows.PowerShellPropertyBagTriggerOnlyProbe">
+            <ScriptName>$Config/ScriptName$</ScriptName>
+            <ScriptBody>$Config/ScriptBody$</ScriptBody>
+            <Parameters>$Config/Parameters$</Parameters>
+            <TimeoutSeconds>$Config/TimeoutInSeconds$</TimeoutSeconds>
+          </ProbeAction>
+        </MemberModules>
+        <Composition>
+          <Node ID="PowershellProbe">
+            <Node ID="Scheduler"/>
+          </Node>
+        </Composition>
+      </Composite>
+    </ModuleImplementation>
+    <OutputType>System!System.PropertyBagData</OutputType>
+  </DataSourceModuleType>
+      </ModuleTypes>
+  </TypeDefinitions>
+</ManagementPackFragment>

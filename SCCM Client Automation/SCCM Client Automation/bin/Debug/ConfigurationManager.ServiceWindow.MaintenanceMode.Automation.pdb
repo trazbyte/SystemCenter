@@ -1,0 +1,4 @@
+Microsoft.SystemCenter.SCCMClientAutomation.MaintenanceMode.Powershell.DataSourceModule.mpx*Microsoft.SystemCenter.ConfigMgrAgent.Automation.MaintenanceMode.Powershell.DataSourceModule*4*4*DataSourceModuleType
+HealthModel\Rules.mptg.mpx*ConfigurationManager.ServiceWindow.MaintenanceMode.Automation.AgentInitiated.Rule*6*8*Rule
+HealthModel\Rules.mptg.mpx*ConfigurationManager.ServiceWindow.MaintenanceMode.Automation.AgentInitiated.Rule*274*10*DisplayString
+MPDisplayName.mpx*ConfigurationManager.ServiceWindow.MaintenanceMode.Automation*5*10*DisplayString
